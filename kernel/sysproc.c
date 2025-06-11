@@ -5,6 +5,7 @@
 #include "memlayout.h"
 #include "spinlock.h"
 #include "proc.h"
+#include "pstat.h"
 
 uint64
 sys_exit(void)
@@ -90,4 +91,47 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+uint64
+sys_settickets(void)
+{
+    int tickets;
+    
+    // Get the number of tickets from user space
+    argint(0, &tickets);
+    
+    // Check if tickets is valid (must be >= 1)
+    if(tickets < 1) {
+        tickets = 1; // Default to 1 if invalid
+    }
+    
+    // Set tickets for current process
+    struct proc *p = myproc();
+    acquire(&p->lock);
+    p->tickets_original = tickets;
+    p->tickets_current = tickets;
+    release(&p->lock);
+    
+    return 0;
+}
+
+uint64
+sys_getpinfo(void)
+{
+    uint64 addr;
+    struct pstat ps;
+    
+    // Get pointer from user space
+    argaddr(0, &addr);
+    
+    // Fill pstat structure
+    if(getpinfo(&ps) < 0)
+        return -1;
+    
+    // Copy to user space
+    if(copyout(myproc()->pagetable, addr, (char*)&ps, sizeof(ps)) < 0)
+        return -1;
+    
+    return 0;
 }

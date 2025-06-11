@@ -26,6 +26,16 @@ extern char trampoline[]; // trampoline.S
 // must be acquired before any p->lock.
 struct spinlock wait_lock;
 
+// Simple PRNG for lottery scheduling
+static unsigned int seed = 1;
+
+unsigned int
+random(void)
+{
+    seed = seed * 1103515245 + 12345;
+    return seed;
+}
+
 // Allocate a page for each process's kernel stack.
 // Map it high in memory, followed by an invalid
 // guard page.
@@ -146,6 +156,11 @@ found:
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
 
+  // Initialize lottery scheduling fields
+  p->tickets_original = 1;  // Default 1 ticket
+  p->tickets_current = 1;
+  p->time_slices = 0;
+
   return p;
 }
 
@@ -169,6 +184,9 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+  p->tickets_original = 0;
+  p->tickets_current = 0;
+  p->time_slices = 0;
 }
 
 // Create a user page table for a given process, with no user memory,
@@ -241,6 +259,9 @@ userinit(void)
   // and data into it.
   uvmfirst(p->pagetable, initcode, sizeof(initcode));
   p->sz = PGSIZE;
+  p->tickets_original = 1; // original number of tickets for lottery scheduling
+  p->tickets_current = 1; // current number of tickets for lottery scheduling
+  p->time_slices = 0; // number of time slices the process has been scheduled
 
   // prepare for the very first "return" from kernel to user.
   p->trapframe->epc = 0;      // user program counter
@@ -295,6 +316,9 @@ fork(void)
     return -1;
   }
   np->sz = p->sz;
+  np->tickets_current = p->tickets_current;
+  np->tickets_original = p->tickets_original;
+  np->time_slices = 0;
 
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
@@ -454,28 +478,49 @@ scheduler(void)
     // processes are waiting.
     intr_on();
 
-    int found = 0;
+    int total_tickets = 0;
+    
     for(p = proc; p < &proc[NPROC]; p++) {
       acquire(&p->lock);
       if(p->state == RUNNABLE) {
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
-        p->state = RUNNING;
-        c->proc = p;
-        swtch(&c->context, &p->context);
-
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
-        c->proc = 0;
-        found = 1;
+        total_tickets += p->tickets_current; 
       }
       release(&p->lock);
     }
-    if(found == 0) {
-      // nothing to run; stop running on this core until an interrupt.
-      intr_on();
-      asm volatile("wfi");
+    
+    if(total_tickets == 0) {
+      for(p = proc; p < &proc[NPROC]; p++) {
+        acquire(&p->lock);
+        if(p->state == RUNNABLE) {
+          p->tickets_current = p->tickets_original;
+          total_tickets += p->tickets_current;
+        }
+        release(&p->lock);
+      }
+    }
+    
+    int winner = random() % total_tickets;
+    int count = 0;
+    
+    for(p = proc; p < &proc[NPROC]; p++){
+      acquire(&p->lock);
+      if(p->state == RUNNABLE) {
+        count += p->tickets_current;
+        if(count > winner && p->tickets_current > 0) {
+          // Found the winner
+          p->state = RUNNING;
+          p->tickets_current--;  // Use one ticket
+          p->time_slices++;      // Increment time slice count
+          c->proc = p;
+          swtch(&c->context, &p->context);
+          
+          // Process is done running for now.
+          c->proc = 0;
+          release(&p->lock);
+          break;
+        }
+      }
+      release(&p->lock);
     }
   }
 }
@@ -692,4 +737,26 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+int
+getpinfo(struct pstat *ps)
+{
+  struct proc *p;
+  int i = 0;
+  
+  for(p = proc; p < &proc[NPROC]; p++){
+    acquire(&p->lock);
+    
+    ps->pid[i] = p->pid;
+    ps->inuse[i] = (p->state != UNUSED);
+    ps->tickets_original[i] = p->tickets_original;
+    ps->tickets_current[i] = p->tickets_current;
+    ps->time_slices[i] = p->time_slices;
+    
+    release(&p->lock);
+    i++;
+  }
+  
+  return 0;
 }
