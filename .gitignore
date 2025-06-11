@@ -16,3 +16,4 @@ kernel/kernel
 user/usys.S
 .gdbinit
 .vscode
+011221068.patch
