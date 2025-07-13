@@ -1,26 +1,37 @@
 #include "kernel/types.h"
-#include "user/user.h"
 #include "kernel/stat.h"
 #include "kernel/pstat.h"
 #include "kernel/param.h"
-
+#include "user/user.h"
 
 int main(int argc, char *argv[])
 {
-    struct pstat pst;
-    int r = getpinfo(&pst);
-    if(r < 0)
+    struct pstat psinfo;
+    int status = getpinfo(&psinfo);
+
+    if (status != 0)
     {
-        printf("Something went wrong!\n");
-        return 0;
+        fprintf(2, "Error: Failed to get process info\n");
+        exit(1);
     }
-    printf("\nPID\tIn Use\tOriginal Tickets\tCurrent Tickets\t\tTime Slices\n");
-    for (int i = 0; i < NPROC; i++)
+
+    printf("\n%-5s %-7s %-19s %-19s %-12s\n", "PID", "InUse", "Original Tickets", "Current Tickets", "Time Slices");
+
+    int index = 0;
+    while (index < NPROC)
     {
-        if (pst.inuse[i] == 1)
+        if (psinfo.inuse[index])
         {
-            printf("%d\t%d\t%d\t\t\t%d\t\t\t%d\n",pst.pid[i], pst.inuse[i], pst.tickets_original[i], pst.tickets_current[i], pst.time_slices[i]);
+            int pid = psinfo.pid[index];
+            int in = psinfo.inuse[index];
+            int ori = psinfo.tickets_original[index];
+            int cur = psinfo.tickets_current[index];
+            int ts = psinfo.time_slices[index];
+
+            printf("%-5d %-7d %-19d %-19d %-12d\n", pid, in, ori, cur, ts);
         }
+        index++;
     }
-    return 0;
+
+    exit(0);
 }
