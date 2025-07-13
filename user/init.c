@@ -6,49 +6,63 @@
 #include "kernel/sleeplock.h"
 #include "kernel/fs.h"
 #include "kernel/file.h"
-#include "user/user.h"
 #include "kernel/fcntl.h"
+#include "user/user.h"
 
-char *argv[] = { "sh", 0 };
-
-int
-main(void)
+int main(void)
 {
-  int pid, wpid;
+  char *args[] = {"sh", 0};
+  int child_pid = -1;
+  int status_pid = -1;
 
-  if(open("console", O_RDWR) < 0){
+  // Ensure console device is open
+  int fd = open("console", O_RDWR);
+  if (fd < 0)
+  {
     mknod("console", CONSOLE, 0);
-    open("console", O_RDWR);
+    fd = open("console", O_RDWR);
   }
-  dup(0);  // stdout
-  dup(0);  // stderr
 
-  for(;;){
+  // Redirect stdout and stderr
+  for (int i = 0; i < 2; i++)
+  {
+    dup(0);
+  }
+
+  // Start shell loop
+  while (1)
+  {
     printf("init: starting sh\n");
-    pid = fork();
-    if(pid < 0){
-      printf("init: fork failed\n");
-      exit(1);
-    }
-    if(pid == 0){
-      exec("sh", argv);
-      printf("init: exec sh failed\n");
+
+    child_pid = fork();
+    if (child_pid < 0)
+    {
+      fprintf(2, "init: fork failed\n");
       exit(1);
     }
 
-    for(;;){
-      // this call to wait() returns if the shell exits,
-      // or if a parentless process exits.
-      wpid = wait((int *) 0);
-      if(wpid == pid){
-        // the shell exited; restart it.
+    if (child_pid == 0)
+    {
+      exec("sh", args);
+      fprintf(2, "init: exec sh failed\n");
+      exit(1);
+    }
+
+    // Monitor child process
+    while (1)
+    {
+      status_pid = wait(0);
+      if (status_pid == child_pid)
+      {
+        // shell exited, respawn
         break;
-      } else if(wpid < 0){
-        printf("init: wait returned an error\n");
-        exit(1);
-      } else {
-        // it was a parentless process; do nothing.
       }
+      else if (status_pid < 0)
+      {
+        fprintf(2, "init: wait error\n");
+        exit(1);
+      }
+      // orphaned child, ignore
     }
   }
 }
